@@ -1,0 +1,26 @@
+{
+  "version": "0.1.1",
+  "ruleTests": { "passed": 17, "failed": 0 },
+  "browserIntegrationTests": { "passed": 18, "failed": 0 },
+  "productionUiChecks": {
+    "testPage": "新建且未保存的差旅报销单",
+    "smallCategory": "国内差旅费",
+    "departure": "中国/上海/上海",
+    "arrival": "中国/广东/深圳",
+    "expenseCategory": "交通费",
+    "invoiceProperty": "专票",
+    "rate": "13%",
+    "testAmount": "113.00",
+    "testTax": "13.00",
+    "observedNetAmount": "100.00",
+    "observedTotals": ["113.00", "13.00", "100.00"],
+    "department": "未填写",
+    "costCenter": "未填写",
+    "saved": false,
+    "submitted": false,
+    "realInvoicesSelectedOrRemoved": false,
+    "method": "通过浏览器UI验证真实选择器及金额联动，不等同于在用户Edge安装插件后的完整流程验证"
+  },
+  "unresolvedBusinessRule": "普票费用事项仅可选择税率0%，票面税率可能非0%。当前插件保留票面税率；遇到系统不支持的选项时提示并回退，等待用户确认填写口径。",
+  "evidence": "真实填表测试-未保存未提交.jpg"
+}

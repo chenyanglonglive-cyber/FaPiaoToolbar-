@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>佳利达 · 报销事项助手</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <header class="topbar"><div class="identity"><div class="brand-icon" aria-hidden="true">费</div><div><strong>佳利达 · 报销事项助手</strong><span id="mode-label">差旅费报销单</span></div></div><span class="local-badge">本地计算 · 逐票可查</span></header>
+  <main class="workspace">
+    <div class="page-heading"><div><p class="eyebrow">费用事项</p><h1>把发票整理成报销明细</h1><p class="muted">按分类、普票 / 专票和税率分别汇总，保留每张发票的来源。</p></div><button id="calculate" class="primary">读取并计算</button></div>
+    <div id="status" class="notice" role="status" aria-live="polite">点击“读取并计算”，读取报销表格中的全部发票。</div>
+    <div id="demo-notice" class="demo-notice" hidden>这是本地模拟报销单，所有填写仅发生在模拟表单中。</div>
+    <section class="context-bar" aria-label="出差信息">
+      <label>出发城市<input id="departure" placeholder="从事前申请提取" autocomplete="off"></label><span class="route-arrow" aria-hidden="true">→</span>
+      <label>到达城市<input id="arrival" placeholder="从事前申请提取" autocomplete="off"></label>
+      <label class="days-label">停留天数<input id="days" type="number" min="1" step="1" placeholder="出差天数"></label>
+      <div class="context-note">费用小类<strong>国内差旅</strong><span>费用部门、成本中心由你填写</span></div>
+    </section>
+    <section id="category-summary" class="category-summary" aria-label="各类发票汇总"></section>
+    <div class="main-grid">
+      <section class="paper"><div class="section-heading"><div><h2>待填入的费用事项</h2><p id="group-count" class="muted">读取后生成费用分组</p></div><span id="stamp" class="stamp">待计算</span></div>
+        <div id="groups" class="group-list"><div class="empty-state"><span aria-hidden="true">▤</span><p>先读取发票，再查看每组金额和明细。</p></div></div>
+        <div id="totals" class="totals" hidden></div>
+        <div class="paper-footer"><p>填入前会重新核对发票；填入后请在原表补齐部门与成本中心。</p><div class="button-row"><button id="undo" class="secondary" disabled>撤销本次填入</button><button id="apply" class="primary" disabled>确认填入费用事项</button></div></div>
+      </section>
+      <aside class="paper log-panel"><div class="section-heading"><div><h2>计算日志</h2><p class="muted">每次计算，逐张记录归类</p></div><span class="log-dot" aria-hidden="true"></span></div><div id="log-summary" class="log-summary">尚未生成日志</div><div class="button-row log-actions"><button id="download" class="secondary" disabled>下载本次日志</button><button id="view-log" class="text-button" disabled>查看全文</button></div><h3 class="history-title">最近的计算</h3><div id="history" class="history"></div><button id="clear-history" class="text-button clear-history">清除本机历史日志</button></aside>
+    </div>
+    <section class="paper invoice-section"><div class="section-heading"><div><h2>发票归类核对</h2><p class="muted">可调整分类或确认票种。修改后重新计算，并生成新的日志。</p></div><label class="filter-label">显示分类<select id="filter"><option value="全部">全部分类</option><option>交通</option><option>住宿</option><option>餐费</option><option>其他</option></select></label></div><div class="table-scroll"><table class="invoice-table"><thead><tr><th>发票号 / 发票内容</th><th>原始票种</th><th>对应分类</th><th>发票属性</th><th>税率</th><th class="numeric">报销金额</th><th class="numeric">税额</th></tr></thead><tbody id="invoices"><tr><td colspan="7" class="empty-cell">读取后显示全部发票，包括未勾选的发票。</td></tr></tbody></table></div></section>
+    <details id="demo-source" class="paper demo-source" hidden><summary>查看模拟报销表单</summary></details>
+    <footer class="site-footer">仅整理当前报销单中的发票 · 金额按分精确累加 · 税额使用票面税额</footer>
+  </main>
+  <dialog id="log-dialog"><div class="dialog-heading"><h2>计算日志全文</h2><button id="close-log" class="secondary">关闭</button></div><pre id="log-content"></pre></dialog>
+  <script type="module" src="dashboard.js"></script>
+</body></html>

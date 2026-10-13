@@ -1,0 +1,11 @@
+﻿{
+  "name": "jdl-expense-assistant",
+  "version": "0.2.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "demo": "node tools/server.js",
+    "check": "node tools/check.js"
+  }
+}
