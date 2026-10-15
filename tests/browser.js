@@ -17,7 +17,7 @@ async function suite(){
       const table=w.document.getElementById(id);const head=table.cloneNode(true);head.id=id+'_head';head.querySelector('tbody').replaceChildren();table.before(head);
     }
     const reply=await w.JdlExpenseAdapter.run('read');assert(reply.ok,reply.error);assert(sourceSignature(before.snapshot)===sourceSignature(reply.snapshot),'误选固定表头副本');assert(w.MockForm.apiCalls().length===0,'读取修改了表单');
-    const filled=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(reply.snapshot));assert(filled.ok,filled.error);assert(filled.rows.length===7,'固定表头影响费用生成');
+    const filled=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(reply.snapshot));assert(filled.ok,filled.error);assert(filled.rows.length===8,'固定表头影响费用生成');
   });
   await run('只读字段仅有span ID且没有行标记时读取全部发票',async()=>{
     const w=await load();const before=await w.JdlExpenseAdapter.run('read');
@@ -123,11 +123,24 @@ async function suite(){
     const w=await load();for(const row of [...w.MockForm.rows.detail_3].slice(1))w.MockForm.removeSource(row);
     for(const [label,value] of [['发票内容','*交通运输服务*客运服务费'],['发票税率','3%'],['发票价税合计','39.25'],['发票未税金额','38.11'],['发票税额','1.14']])w.MockForm.setSource('0',label,value);
     const read=await w.JdlExpenseAdapter.run('read');const plan=calculateAutomatic(read.snapshot);
-    assert(plan.groups.length===1&&plan.groups[0].key==='交通|电子打车票|3%|打车','打车票识别或分组错误');
+    assert(plan.groups.length===2&&plan.groups[0].key==='交通|电子打车票|3%|打车'&&plan.groups[1].key==='其他|其他|0%|出差补助','打车票或补助分组错误');
     const reply=await w.JdlExpenseAdapter.run('automatic',plan);assert(reply.ok,reply.error);
     assert(w.WfForm.getFieldValue('field21332_0')==='taxi-code','未选电子打车票');
     assert(w.WfForm.getFieldValue('field21323_0')==='rate-3','未选票面3%');
     assert(w.WfForm.getFieldValue('field21319_0')==='39.25'&&w.WfForm.getFieldValue('field21324_0')==='1.14','金额或可抵扣税额错误');
+  });
+  await run('铁路电子客票按票面9%计算抵扣并另加每日60元补助，重复运行不增加事项',async()=>{
+    const w=await load();for(const row of [...w.MockForm.rows.detail_3].slice(1))w.MockForm.removeSource(row);
+    for(const [label,value] of [['发票内容','铁路电子客票'],['发票类型','铁路电子客票'],['发票税率','9%'],['发票价税合计','381.00'],['发票未税金额','349.54'],['发票税额','31.46']])w.MockForm.setSource('0',label,value);
+    let read=await w.JdlExpenseAdapter.run('read');let plan=calculateAutomatic(read.snapshot);
+    assert(plan.groups.length===2&&plan.groups[0].key==='交通|火车票|9%-计算抵扣|火车','火车票分类或税率错误');
+    let reply=await w.JdlExpenseAdapter.run('automatic',plan);assert(reply.ok,reply.error);
+    assert(reply.rows.length===2,'补助事项未写入');
+    assert(w.WfForm.getFieldValue('field21332_0')==='train-code'&&w.WfForm.getFieldValue('field21323_0')==='rate-9-deduct','系统火车票选项未匹配');
+    assert(w.WfForm.getFieldValue('field21319_0')==='381.00'&&w.WfForm.getFieldValue('field21324_0')==='31.46','火车票金额或税额错误');
+    assert(w.WfForm.getFieldValue('field21332_1')==='other-code'&&w.WfForm.getFieldValue('field21319_1')==='180.00'&&w.WfForm.getFieldValue('field21324_1')==='0.00','3天补助未写入');
+    read=await w.JdlExpenseAdapter.run('read');plan=calculateAutomatic(read.snapshot);reply=await w.JdlExpenseAdapter.run('automatic',plan);
+    assert(reply.ok,reply.error);assert(w.MockForm.rows.detail_1.length===2,'重复运行产生额外补助行');
   });
   await run('自动模式缺少城市和天数时仍填写金额，字段留空并提示',async()=>{
     const w=await load();w.MockForm.values.set('field40000_0','行程未确定');w.MockForm.values.set('field21403','');
@@ -137,17 +150,17 @@ async function suite(){
   await run('自动模式覆盖人工金额并按分组保留部门成本中心，重复运行不增加行',async()=>{
     const w=await load();for(const [field,value] of [['field21320','exp-travel'],['field21332','ordinary-code'],['field21323','rate-0'],['field21319','766.00'],['field21326','manual-dept'],['field21325','manual-cost']])w.WfForm.changeFieldValue(`${field}_0`,{value});
     let read=await w.JdlExpenseAdapter.run('read');let reply=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot));assert(reply.ok,reply.error);assert(w.WfForm.getFieldValue('field21319_0')==='766.00','未覆盖');assert(w.WfForm.getFieldValue('field21326_0')==='manual-dept'&&w.WfForm.getFieldValue('field21325_0')==='manual-cost','未保留匹配部门');
-    read=await w.JdlExpenseAdapter.run('read');reply=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot));assert(reply.ok,reply.error);assert(w.MockForm.rows.detail_1.length===7,'重复运行增加行');
+    read=await w.JdlExpenseAdapter.run('read');reply=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot));assert(reply.ok,reply.error);assert(w.MockForm.rows.detail_1.length===8,'重复运行增加行');
   });
   await run('自动模式跳过无效和重复发票，不漏掉有效发票',async()=>{
     const w=await load();w.MockForm.setSource('0','发票号码','DUPLICATE');w.MockForm.setSource('2','发票号码','DUPLICATE');w.MockForm.setSource('4','发票税额','');
-    const read=await w.JdlExpenseAdapter.run('read');const plan=calculateAutomatic(read.snapshot);assert(plan.skippedInvoices.length===3,'未跳过全部重复或无效票');const reply=await w.JdlExpenseAdapter.run('automatic',plan);assert(reply.ok,reply.error);assert(reply.rows.length===6,'有效票分组不正确');
+    const read=await w.JdlExpenseAdapter.run('read');const plan=calculateAutomatic(read.snapshot);assert(plan.skippedInvoices.length===3,'未跳过全部重复或无效票');const reply=await w.JdlExpenseAdapter.run('automatic',plan);assert(reply.ok,reply.error);assert(reply.rows.length===7,'有效票分组不正确');
   });
   await run('自动模式将普票统一归为0%并清空无法匹配的旧行',async()=>{
     const w=await load();for(const row of [...w.MockForm.rows.detail_3].slice(2))w.MockForm.removeSource(row);w.MockForm.setSource('2','发票税率','0%');w.MockForm.setSource('2','发票税额','0.00');w.MockForm.setSource('2','发票未税金额','375.00');
     for(const [field,value] of [['field21320','exp-travel'],['field21332','ordinary-code'],['field21323','rate-13'],['field21319','999.00'],['field21326','manual-dept']])w.WfForm.changeFieldValue(`${field}_0`,{value});
     w.MockForm.setOrdinaryRatesZero();
-    const read=await w.JdlExpenseAdapter.run('read');const reply=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot));assert(reply.ok,reply.error);assert(reply.rows.length===1&&reply.skippedGroups.length===0,'普票0%未填写');assert(w.WfForm.getFieldValue('field21319_0')==='','保留了旧报销金额');assert(w.WfForm.getFieldValue('field21326_0')==='manual-dept','丢失部门');
+    const read=await w.JdlExpenseAdapter.run('read');const reply=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot));assert(reply.ok,reply.error);assert(reply.rows.length===2&&reply.skippedGroups.length===0,'普票0%或补助未填写');assert(w.WfForm.getFieldValue('field21319_0')==='','保留了旧报销金额');assert(w.WfForm.getFieldValue('field21326_0')==='manual-dept','丢失部门');
   });
   await run('自动模式无法匹配旧分组保留部门并清空旧金额，全部发票无效时不覆盖',async()=>{
     const w=await load();w.WfForm.changeFieldValue('field21319_0',{value:'999.00'});w.WfForm.changeFieldValue('field21326_0',{value:'unmatched-dept'});
@@ -158,12 +171,12 @@ async function suite(){
     const w=await load();const read=await w.JdlExpenseAdapter.run('read');
     const created=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot));assert(created.ok,created.error);
     const options=await w.JdlExpenseAdapter.run('sharedOptions');assert(options.ok,options.error);
-    assert(options.rowCount===7,'未识别当前7条费用事项');
+    assert(options.rowCount===8,'未识别当前8条费用事项');
     assert(options.options.department.includes('明阳智慧综合部')&&options.options.costCenter.includes('深圳佳利达')&&options.options.departure.includes('深圳'),'未从页面读取动态选项');
     const before=w.MockForm.rows.detail_1.map(row=>w.WfForm.getFieldValue(`field21319_${row}`));
     const applied=await w.JdlExpenseAdapter.run('applyShared',{context:options.context,fingerprint:options.fingerprint,
       values:{department:'明阳智慧综合部',costCenter:'深圳佳利达',departure:'深圳',arrival:'北京'}});
-    assert(applied.ok,applied.error);assert(applied.written.length===28,'公共字段未逐项填写');assert(applied.pending.length===0&&applied.missing.length===0,'完成后仍显示缺失');
+    assert(applied.ok,applied.error);assert(applied.written.length===32,'公共字段未逐项填写');assert(applied.pending.length===0&&applied.missing.length===0,'完成后仍显示缺失');
     for(const [index,row] of w.MockForm.rows.detail_1.entries()){
       assert(w.WfForm.getFieldValue(`field21326_${row}`)==='dept-admin','部门未填写');
       assert(w.WfForm.getFieldValue(`field21325_${row}`)==='cost-shenzhen','成本中心未填写');
@@ -178,8 +191,85 @@ async function suite(){
     assert(!reply.ok&&w.MockForm.apiCalls().length===count,'切换报销单后仍写入');
     options=await w.JdlExpenseAdapter.run('sharedOptions');
     reply=await w.JdlExpenseAdapter.run('applyShared',{context:options.context,fingerprint:options.fingerprint,values:{department:'明阳智慧综合部',arrival:'不存在的城市'}});
-    assert(reply.ok,reply.error);assert(reply.written.length===7&&reply.pending.length===7,'未逐字段继续或提示未知选项');
+    assert(reply.ok,reply.error);assert(reply.written.length===8&&reply.pending.length===8,'未逐字段继续或提示未知选项');
     assert(w.MockForm.rows.detail_1.every(row=>w.WfForm.getFieldValue(`field21326_${row}`)==='dept-admin'),'有效部门未保留');
+  });
+  await run('业务招待单只写票种税率金额税额，客运普票零抵扣，部门成本中心可批量选',async()=>{
+    const w=await load();
+    w.WfForm.getBaseInfo=()=>({workflowid:'231',requestid:'business-case'});
+    w.MockForm.setSource('4','发票内容','*运输服务*客运服务费');
+    const read=await w.JdlExpenseAdapter.run('read');assert(read.ok,read.error);
+    assert(read.snapshot.workflowId==='231'&&Object.keys(read.snapshot.fields).sort().join(',')==='amount,costCenter,department,property,rate,tax','业务表单字段集合错误');
+    const plan=calculateAutomatic(read.snapshot);
+    assert(plan.groups.length===4&&plan.totals.amountCents===301690&&plan.totals.taxCents===7800,'业务分组或抵扣金额错误');
+    assert(plan.groups.find(g=>g.key==='其他|普票|0%|通用').invoices.some(i=>i.content.includes('客运服务费')),'客运普票未并入其他普票');
+    const applied=await w.JdlExpenseAdapter.run('automatic',plan);assert(applied.ok,applied.error);
+    assert(applied.rows.length===4,'业务事项未全部填入');
+    assert(w.MockForm.apiCalls().filter(call=>call.type==='change').every(call=>!/^field213(?:13|14|15|20|31)_/.test(call.mark)),'业务事项误写差旅字段');
+    const options=await w.JdlExpenseAdapter.run('sharedOptions');assert(options.ok,options.error);
+    assert(options.fields.join(',')==='department,costCenter'&&!options.options.departure,'业务单不应显示城市公共字段');
+    const shared=await w.JdlExpenseAdapter.run('applyShared',{context:options.context,fingerprint:options.fingerprint,values:{department:'明阳智慧综合部',costCenter:'深圳佳利达',departure:'深圳'}});
+    assert(shared.ok&&shared.written.length===8,'部门及成本中心未批量填写');
+    assert(w.MockForm.rows.detail_1.every(row=>!w.WfForm.getFieldValue(`field21313_${row}`)),'业务单误填出发城市');
+  });
+  await run('日常费用单按福利费合并普票并按税率拆专票，只保留部门成本中心批量字段',async()=>{
+    const w=await load();w.WfForm.getBaseInfo=()=>({workflowid:'232',requestid:'daily-case'});
+    w.MockForm.values.set('field21220','1526.66');
+    const selected=w.document.createElement('span');selected.id='field21214span';selected.textContent='薪酬福利';w.document.body.append(selected);
+    w.MockForm.values.set('field21214','66');
+    for(const row of w.MockForm.rows.detail_3)w.MockForm.setSource(row,'发票内容','员工团建物资');
+    for(const root of w.document.querySelectorAll('#oTable0 [data-fieldname="fyxl1"]')){
+      root.dataset.fieldname='fyxl';root.querySelector('select').append(new Option('福利费','welfare-code'));
+    }
+    for(const root of w.document.querySelectorAll('#oTable0 [data-fieldname="fpzx"]'))root.dataset.fieldname='xfpzx';
+    const add=w.WfForm.addDetailRow;
+    w.WfForm.addDetailRow=(detail,initial)=>{add(detail,initial);const row=w.MockForm.rows.detail_1.at(-1);const root=w.document.querySelector(`[data-fieldmark="field21331_${row}"]`);root.dataset.fieldname='fyxl';root.querySelector('select').append(new Option('福利费','welfare-code'));};
+    const read=await w.JdlExpenseAdapter.run('read');assert(read.ok,read.error);
+    assert(read.snapshot.workflowId==='232'&&Object.keys(read.snapshot.fields).sort().join(',')==='amount,costCenter,department,property,rate,smallCategory,tax','日常单字段结构错误');
+    const plan=calculateAutomatic(read.snapshot);assert(plan.groups.length===3,'普票或专票分组错误');
+    assert(plan.groups.find(group=>group.key==='其他|普票|0%|通用|福利费').attachmentAmountCents===152666,'附件金额未并入普票');
+    assert(plan.warnings.some(item=>item.includes('附件票种未核实')),'未提示附件票种未核实');
+    const applied=await w.JdlExpenseAdapter.run('automatic',plan);assert(applied.ok,applied.error);
+    assert(applied.rows.length===3,'日常事项未写全');
+    assert(applied.rows.every(row=>w.WfForm.getFieldValue(`field21331_${row}`)==='welfare-code'),'未统一填写福利费');
+    assert(w.MockForm.apiCalls().filter(call=>call.type==='change').every(call=>!/^field213(?:13|14|15|20)_/.test(call.mark)),'日常事项误写差旅字段');
+    const options=await w.JdlExpenseAdapter.run('sharedOptions');assert(options.ok&&options.fields.join(',')==='department,costCenter','日常单公共字段范围错误');
+  });
+  await run('日常办公内容自动选择日常费用大类与日常办公费，混合税率专票跳过',async()=>{
+    const w=await load();w.WfForm.getBaseInfo=()=>({workflowid:'232',requestid:'office-case'});
+    const category=w.document.createElement('div');category.dataset.fieldmark='field21214';category.dataset.fieldname='fydl';
+    const select=w.document.createElement('select');select.id='field21214';select.append(new Option('',''),new Option('日常费用','daily-code'),new Option('薪酬福利','welfare-code'));category.append(select);w.document.body.append(category);
+    for(const root of w.document.querySelectorAll('#oTable0 [data-fieldname="fyxl1"]')){
+      root.dataset.fieldname='fyxl';root.querySelector('select').append(new Option('日常办公费','office-code'));
+    }
+    for(const root of w.document.querySelectorAll('#oTable0 [data-fieldname="fpzx"]'))root.dataset.fieldname='xfpzx';
+    for(const row of w.MockForm.rows.detail_3){
+      w.MockForm.setSource(row,'发票内容','计算机外部设备U盘');
+      w.MockForm.setSource(row,'发票类型','电子发票（增值税普通发票）');
+    }
+    w.MockForm.setSource('0','发票内容','快递费,纸制品');w.MockForm.setSource('0','发票类型','电子发票（增值税专用发票）');
+    w.MockForm.setSource('0','发票税率','6.00%,13.00%');
+    const read=await w.JdlExpenseAdapter.run('read');assert(read.ok,read.error);
+    const plan=calculateAutomatic(read.snapshot);assert(plan.dailyBigCategory==='日常费用'&&plan.groups.length===1,'办公费用途分类错误');
+    assert(plan.skippedInvoices.length===1&&plan.skippedInvoices[0].row==='0','多税率专票没有安全跳过');
+    const applied=await w.JdlExpenseAdapter.run('automatic',plan);assert(applied.ok,applied.error);
+    assert(w.WfForm.getFieldValue('field21214')==='daily-code','费用大类未选日常费用');
+    assert(applied.rows.every(row=>w.WfForm.getFieldValue(`field21331_${row}`)==='office-code'),'费用小类未选日常办公费');
+  });
+  await run('日常费用单混合办公与福利时只填明确事项，整单大类待补',async()=>{
+    const w=await load();w.WfForm.getBaseInfo=()=>({workflowid:'232',requestid:'mixed-case'});
+    for(const row of [...w.MockForm.rows.detail_3].slice(2))w.MockForm.removeSource(row);
+    w.MockForm.setSource('0','发票内容','办公用品装订');w.MockForm.setSource('2','发票内容','员工福利生日蛋糕');
+    const decorate=root=>{root.dataset.fieldname='fyxl';root.querySelector('select').append(new Option('日常办公费','office-code'),new Option('福利费','welfare-code'));};
+    for(const root of w.document.querySelectorAll('#oTable0 [data-fieldname="fyxl1"]'))decorate(root);
+    for(const root of w.document.querySelectorAll('#oTable0 [data-fieldname="fpzx"]'))root.dataset.fieldname='xfpzx';
+    const add=w.WfForm.addDetailRow;w.WfForm.addDetailRow=(detail,initial)=>{add(detail,initial);const row=w.MockForm.rows.detail_1.at(-1);decorate(w.document.querySelector(`[data-fieldmark="field21331_${row}"]`));};
+    const read=await w.JdlExpenseAdapter.run('read');assert(read.ok,read.error);
+    const plan=calculateAutomatic(read.snapshot);assert(plan.ready&&plan.groups.length===2&&plan.dailyBigCategory==='','混合用途分组错误');
+    const applied=await w.JdlExpenseAdapter.run('automatic',plan);assert(applied.ok,applied.error);
+    assert(applied.rows.length===2&&applied.pending.some(item=>item.includes('待补费用大类')),'未留大类待补');
+    const small=applied.rows.map(row=>w.WfForm.getFieldValue(`field21331_${row}`)).sort();
+    assert(small.join(',')==='office-code,welfare-code','两项明确小类未写入');
   });
   document.getElementById('status').textContent=`测试完成：${passed} 通过，${failed} 失败`;document.getElementById('run').disabled=false;
 }

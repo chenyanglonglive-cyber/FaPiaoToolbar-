@@ -19,8 +19,13 @@ function renderLedger(result) {
   if (!result?.groups.length) { container.append(element('p', '无有效费用分组。')); return; }
   for (const group of expenseLedger(result)) {
     const block = element('section'); block.className = 'ledger-group';
-    block.append(element('h3', `${group.title} · ${group.category} / ${group.kind} / ${group.property} / ${group.rate}`));
-    const status = element('p', `${group.status} · ${group.invoices.length} 张发票${group.reason ? ` · ${group.reason}` : ''}`); status.className = 'ledger-state'; block.append(status);
+    block.append(element('h3', `${group.title} · ${result.workflowId === '232' ? `${group.bigCategory || '大类待补'} / ${group.smallCategory || '小类待补'} / ` : ''}${group.category} / ${group.kind} / ${group.property} / ${group.rate}`));
+    const status = element('p', `${group.status} · ${group.source === 'travelAllowance' ? group.description : `${group.invoices.length - (group.attachmentAmountCents ? 1 : 0)} 张表格发票${group.attachmentAmountCents ? ' + 附件金额（票种未核实）' : ''}`}${group.reason ? ` · ${group.reason}` : ''}`); status.className = 'ledger-state'; block.append(status);
+    if (group.source === 'travelAllowance') {
+      block.append(element('p', `出差补助 ${money(group.amountCents)} 元；可抵扣税额 0.00 元。`));
+      container.append(block);
+      continue;
+    }
     const table = element('table'); table.setAttribute('aria-label', `${group.title}对应发票`);
     const head = element('thead'); const header = element('tr');
     for (const title of ['发票号码', '发票内容', '价税合计', '票面税率', '票面税额', '可抵扣税额']) { const cell = element('th', title); cell.scope = 'col'; header.append(cell); }
@@ -64,6 +69,8 @@ function displayShared(reply) {
   $('shared').hidden = !reply.rowCount;
   $('shared-count').textContent = `（当前 ${reply.rowCount} 项）`;
   for (const key of SHARED_KEYS) {
+    $(`shared-${key}`).closest('label').hidden = !reply.fields?.includes(key);
+    if (!reply.fields?.includes(key)) $(`shared-${key}`).value = '';
     const list = $(`options-${key}`);
     list.replaceChildren();
     for (const label of reply.options?.[key] || []) { const option = document.createElement('option'); option.value = label; list.append(option); }
@@ -136,7 +143,7 @@ $('apply-shared').addEventListener('click', async () => {
   $('body').setAttribute('aria-busy', 'true');
   try {
     if (!sharedScope) throw new Error('尚未读取到当前费用事项，请刷新报销页面后重试。');
-    const values = Object.fromEntries(SHARED_KEYS.map(key => [key, $(`shared-${key}`).value.trim()]));
+    const values = Object.fromEntries(SHARED_KEYS.filter(key => !$(`shared-${key}`).closest('label').hidden).map(key => [key, $(`shared-${key}`).value.trim()]));
     $('shared-status').textContent = '正在将公共字段填写到当前费用事项…';
     const reply = await request('applyShared', {...sharedScope, values});
     if (!reply.ok) throw new Error(reply.error);

@@ -11,8 +11,8 @@
     cfdd:[['city-sh','上海'],['city-sz','深圳'],['city-bj','北京']],
     dddd:[['city-sh','上海'],['city-sz','深圳'],['city-bj','北京']],
     fymx:[['exp-travel','交通费'],['exp-hotel','住宿费'],['exp-meal','餐费'],['exp-other','其他费用']],
-    fpzx:[['special-code','专票'],['ordinary-code','普票'],['taxi-code','电子打车票']],
-    sl:[['rate-13','13%'],['rate-9','9%'],['rate-6','6%'],['rate-3','3%'],['rate-1','1%'],['rate-0','0%'],['exempt','免税'],['outside','不征税']]
+    fpzx:[['special-code','专票'],['ordinary-code','普票'],['taxi-code','电子打车票'],['train-code','火车票'],['air-code','机票'],['other-code','其他']],
+    sl:[['rate-13','13%'],['rate-9','9%'],['rate-9-deduct','9%-计算抵扣'],['rate-6','6%'],['rate-3','3%'],['rate-1','1%'],['rate-0','0%'],['exempt','免税'],['outside','不征税']]
   };
   const samples = [
     ['MOCK-0001','汽油92号车用汽油','电子发票（增值税普通发票）','13%','391.00','346.02','44.98'],

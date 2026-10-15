@@ -1,13 +1,24 @@
 /* Runs only when the user invokes the extension. Never saves or submits a workflow. */
 (() => {
-  if (window.JdlExpenseAdapter?.version === '0.2.5') return;
-  const TARGET = {
+  if (window.JdlExpenseAdapter?.version === '0.2.8') return;
+  const TRAVEL_TARGET = {
     smallCategory: ['fyxl1', 'field21331'], departure: ['cfdd', 'field21313'],
     arrival: ['dddd', 'field21314'], days: ['tlts', 'field21315'],
     category: ['fymx', 'field21320'], property: ['fpzx', 'field21332'],
     rate: ['sl', 'field21323'], amount: ['bxje', 'field21319'], tax: ['se', 'field21324'],
     department: ['jzbm', 'field21326'], costCenter: ['cbzx', 'field21325']
   };
+  const HOSPITALITY_TARGET = {
+    property: ['fpzx', 'field21495'], rate: ['sl', 'field21491'],
+    amount: ['bxje', 'field21489'], tax: ['se', 'field21488'],
+    department: ['jzbm', 'field21494'], costCenter: ['cbzx', 'field21493']
+  };
+  const DAILY_TARGET = {
+    smallCategory: ['fyxl', 'field21113'], property: ['xfpzx', 'field21118'],
+    rate: ['sl', 'field21108'], amount: ['bxje', 'field21106'], tax: ['se', 'field21105'],
+    department: ['jzbm', 'field21110'], costCenter: ['cbzx', 'field21109']
+  };
+  const workflowId = form => String(form.getBaseInfo?.().workflowid || new URLSearchParams(window.location.hash.split('?')[1] || '').get('workflowid') || '');
   const LABELS = {交通: '交通费', 住宿: '住宿费', 餐费: '餐费', 其他: '其他费用'};
   const owned = new Map();
   let ownershipContext = '';
@@ -19,18 +30,17 @@
 
   function api() {
     const form = window.WfForm;
-    if (!form || typeof form.getFieldValue !== 'function') throw new Error('请等待差旅报销表加载完成后重试。');
+    if (!form || typeof form.getFieldValue !== 'function') throw new Error('请等待报销表加载完成后重试。');
     const test = (window.location.hostname === '127.0.0.1' && /^\/(?:extension\/)?demo\//.test(window.location.pathname)) ||
       (window.location.protocol === 'chrome-extension:' && window.location.pathname === '/demo/form.html');
     if (!test && (window.location.hostname !== 'crm.jd-link.com' || window.location.port !== '8888')) throw new Error('仅支持指定的佳利达报销系统。');
-    const workflow = form.getBaseInfo?.().workflowid || new URLSearchParams(window.location.hash.split('?')[1] || '').get('workflowid');
-    if (String(workflow) !== '230') throw new Error('当前页面不是差旅费报销单（流程 230）。');
+    if (!['230', '231', '232'].includes(workflowId(form))) throw new Error('仅在差旅费、业务招待或日常费用报销单页面使用助手。');
     return form;
   }
 
   function context(form) {
     const base = form.getBaseInfo?.() || {};
-    return JSON.stringify({workflow: '230', request: String(base.requestid || new URLSearchParams(location.hash.split('?')[1] || '').get('requestid') || 'new'),
+    return JSON.stringify({workflow: workflowId(form), request: String(base.requestid || new URLSearchParams(location.hash.split('?')[1] || '').get('requestid') || 'new'),
       path: location.pathname, session: String(base.f_weaver_belongto_userid || base.userid || '')});
   }
 
@@ -139,13 +149,14 @@
 
   function targetFields(form) {
     const fields = {};
-    for (const [key, [name, fallback]] of Object.entries(TARGET)) {
+    const workflow = workflowId(form);
+    for (const [key, [name, fallback]] of Object.entries(workflow === '232' ? DAILY_TARGET : workflow === '231' ? HOSPITALITY_TARGET : TRAVEL_TARGET)) {
       const mark = form.convertFieldNameToId?.(name, 'detail_1');
       fields[key] = /^field\d+$/.test(mark || '') ? mark : fallback;
       const actual = document.querySelector(`[data-fieldname="${name}"][data-fieldmark]`);
       if (actual) fields[key] = actual.getAttribute('data-fieldmark').replace(/_\d+$/, '');
     }
-    if (!tableFor(['费用明细', '发票属性', '报销金额'])) throw new Error('未找到费用事项表。');
+    if (!tableFor(workflow === '232' ? ['费用小类', '发票属性', '报销金额'] : workflow === '231' ? ['发票属性', '报销金额', '税额'] : ['费用明细', '发票属性', '报销金额'])) throw new Error('未找到费用事项表。');
     return fields;
   }
 
@@ -321,30 +332,36 @@
 
   function snapshot() {
     const form = api();
+    const nonTravel = ['231', '232'].includes(workflowId(form));
     const currentContext = context(form);
     if (ownershipContext !== currentContext) { owned.clear(); lastUndo = null; ownershipContext = currentContext; }
     const raw = readTable(form, ['发票号码', '发票内容', '发票类型', '发票税率', '发票价税合计', '发票未税金额', '发票税额']);
-    const applications = readTable(form, ['费用说明']);
-    const daysField = document.querySelector('[data-fieldname="ccts"]')?.getAttribute('data-fieldmark') || 'field21403';
+    const applications = nonTravel ? [] : readTable(form, ['费用说明']);
+    const daysField = nonTravel ? '' : document.querySelector('[data-fieldname="ccts"]')?.getAttribute('data-fieldmark') || 'field21403';
     const fields = targetFields(form);
     const existing = indexes(form, 'detail_1').map(row => ({row, owned: owned.has(row),
       values: Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, String(form.getFieldValue(`${field}_${row}`) || '')]))}));
-    return {context: currentContext, days: String(form.getFieldValue(daysField) || ''), descriptions: applications.map(row => row['费用说明']),
+    const existingRoutes = nonTravel ? [] : existing.map(item => ({departure: display(`${fields.departure}_${item.row}`), arrival: display(`${fields.arrival}_${item.row}`)}))
+      .filter(item => item.departure && item.arrival);
+    return {context: currentContext, workflowId: workflowId(form), attachmentAmount: workflowId(form) === '232' ? String(form.getFieldValue('field21220') || '') : '',
+      dailyCategory: workflowId(form) === '232' ? display('field21214') : '',
+      days: nonTravel ? '' : String(form.getFieldValue(daysField) || ''), descriptions: applications.map(row => row['费用说明']), existingRoutes,
       invoices: raw.map(row => ({row: row.row, number: row['发票号码'], content: row['发票内容'], type: row['发票类型'], rate: row['发票税率'], amount: row['发票价税合计'], net: row['发票未税金额'], tax: row['发票税额']})),
       existing, fields, canUndo: !!lastUndo};
   }
 
   const SHARED_FIELDS = {department: '费用部门', costCenter: '成本中心', departure: '出发城市', arrival: '到达城市'};
+  const availableShared = fields => Object.entries(SHARED_FIELDS).filter(([key]) => !!fields[key]);
 
   function sharedState() {
     const form = api();
     const fields = targetFields(form);
     const allRows = indexes(form, 'detail_1');
-    const rows = allRows.filter(row => ['category', 'amount'].some(key => String(form.getFieldValue(`${fields[key]}_${row}`) || '').trim()));
+    const rows = allRows.filter(row => ['category', 'amount'].filter(key => fields[key]).some(key => String(form.getFieldValue(`${fields[key]}_${row}`) || '').trim()));
     const currentContext = context(form);
     if (ownershipContext !== currentContext) { owned.clear(); lastUndo = null; ownershipContext = currentContext; }
     const fingerprint = JSON.stringify({context: currentContext, rows: rows.map(row => ({row,
-      category: String(form.getFieldValue(`${fields.category}_${row}`) || ''),
+      category: fields.category ? String(form.getFieldValue(`${fields.category}_${row}`) || '') : '',
       property: String(form.getFieldValue(`${fields.property}_${row}`) || ''),
       rate: String(form.getFieldValue(`${fields.rate}_${row}`) || ''),
       amount: String(form.getFieldValue(`${fields.amount}_${row}`) || '')}))});
@@ -356,7 +373,7 @@
     const options = {};
     const defaults = {};
     const missing = [];
-    for (const [key, label] of Object.entries(SHARED_FIELDS)) {
+    for (const [key, label] of availableShared(state.fields)) {
       const found = new Map();
       const selected = new Set();
       for (const row of state.rows) {
@@ -370,14 +387,14 @@
       options[key] = [...found.values()];
       defaults[key] = selected.size === 1 ? [...selected][0] : '';
     }
-    return {ok: true, context: state.context, fingerprint: state.fingerprint, rowCount: state.rows.length, options, defaults, missing};
+    return {ok: true, context: state.context, fingerprint: state.fingerprint, rowCount: state.rows.length, fields: availableShared(state.fields).map(([key]) => key), options, defaults, missing};
   }
 
   async function applyShared(payload) {
     const state = sharedState();
     if (!state.rows.length) throw new Error('当前页面没有可批量填写的费用事项。');
     if (payload?.context !== state.context || payload?.fingerprint !== state.fingerprint) throw new Error('费用事项已变化，请刷新悬浮窗选项后重试。');
-    const requested = Object.entries(SHARED_FIELDS).map(([key, label]) => ({key, label, name: String(payload?.values?.[key] || '').trim()})).filter(item => item.name);
+    const requested = availableShared(state.fields).map(([key, label]) => ({key, label, name: String(payload?.values?.[key] || '').trim()})).filter(item => item.name);
     if (!requested.length) throw new Error('请至少填写一个公共字段。');
     if (requested.some(item => item.name.length > 120)) throw new Error('字段名称过长，请核对。');
     const written = [];
@@ -408,7 +425,7 @@
   }
 
   function signature(snapshot) {
-    return JSON.stringify({context: snapshot.context || '', days: String(snapshot.days ?? ''), descriptions: snapshot.descriptions || [],
+    return JSON.stringify({context: snapshot.context || '', workflowId: String(snapshot.workflowId ?? ''), attachmentAmount: String(snapshot.attachmentAmount ?? ''), dailyCategory: String(snapshot.dailyCategory ?? ''), days: String(snapshot.days ?? ''), descriptions: snapshot.descriptions || [], existingRoutes: snapshot.existingRoutes || [],
       invoices: snapshot.invoices.map(invoice => ({row: String(invoice.row), number: String(invoice.number), content: String(invoice.content), type: String(invoice.type), rate: String(invoice.rate), amount: String(invoice.amount), tax: String(invoice.tax), net: String(invoice.net ?? '')}))});
   }
 
@@ -427,11 +444,26 @@
     const source = new Map(before.invoices.map(invoice => [String(invoice.row), invoice]));
     const used = new Set();
     const keys = new Set();
+    const attachment = before.workflowId === '232' && String(before.attachmentAmount || '').trim() ? cents(before.attachmentAmount) : 0;
+    if (attachment < 0) throw new Error('附件发票金额无效，请重新计算。');
+    let attachmentUsed = false;
     for (const group of plan.groups) {
-      if (group.key !== `${group.category}|${group.property}|${group.rate}|${group.kind}` || keys.has(group.key)) throw new Error('费用事项分组重复或无效，请重新计算。');
+      if (group.key !== `${group.category}|${group.property}|${group.rate}|${group.kind}${before.workflowId === '232' ? `|${group.smallCategory || ''}` : ''}` || keys.has(group.key)) throw new Error('费用事项分组重复或无效，请重新计算。');
       keys.add(group.key);
+      if (group.source === 'travelAllowance') {
+        const days = String(before.days || '').trim();
+        const amount = Number(days) * 6000;
+        if (before.workflowId !== '230' || group.key !== '其他|其他|0%|出差补助' || !/^\d+$/.test(days) || Number(days) <= 0 || !Number.isSafeInteger(amount) ||
+            group.amountCents !== amount || group.taxCents !== 0 || group.invoices?.length) throw new Error('出差补助与当前出差天数不一致，请重新计算。');
+        continue;
+      }
       let amount = 0; let tax = 0;
-      if (!group.invoices?.length) throw new Error('费用事项没有对应发票。');
+      if (group.attachmentAmountCents != null) {
+        if (before.workflowId !== '232' || attachment <= 0 || attachmentUsed || group.key !== `其他|普票|0%|通用|${group.smallCategory || ''}` || group.attachmentAmountCents !== attachment) throw new Error('附件发票金额与普票分组不一致，请重新计算。');
+        amount = attachment;
+        attachmentUsed = true;
+      }
+      if (!group.invoices?.length && group.attachmentAmountCents == null) throw new Error('费用事项没有对应发票。');
       for (const item of group.invoices) {
         const row = String(item.row); const invoice = source.get(row);
         if (!invoice || used.has(row) || String(item.number) !== invoice.number) throw new Error('费用事项有遗漏或重复发票，请重新计算。');
@@ -441,14 +473,20 @@
           (/电子/.test(type) && /普通|普票/.test(type) &&
             ((/滴滴|Didi/i.test(`${type} ${content}`) && /打车|滴滴|Didi|客运|旅客运输|出租车|网约车/i.test(`${type} ${content}`)) ||
               (/客运服务费/.test(content) && /^0*3(?:\.0+)?%?$/.test(String(invoice.rate || '').normalize('NFKC').replace(/\s/g, '')))));
-        const property = /专用|专票/.test(type) ? '专票' : taxi ? '电子打车票' : '普票';
+        const property = ['231', '232'].includes(before.workflowId) && /普通|普票/.test(type) ? '普票' : /专用|专票/.test(type) ? '专票' : /铁路电子客票|火车票/.test(type) ? '火车票' : taxi ? '电子打车票' :
+          /普通|普票/.test(type) && /机票|航空旅客人身意外伤害保险/.test(content) ? '机票' : '普票';
         const rawRate = String(invoice.rate || '').normalize('NFKC').replace(/\s/g, '');
         const match = /^(\d{1,2}(?:\.\d{1,4})?|100(?:\.0{1,4})?)%?$/.exec(rawRate);
         const invoiceRate = match ? `${Number(match[1])}%` : rawRate;
-        const expenseRate = property === '普票' ? '0%' : invoiceRate;
-        const kind = group.category !== '交通' ? '通用' : property === '电子打车票' ? '打车' : /汽油|柴油|燃油|加油/.test(content) ? '燃油' : /机票|航空运输|飞机票/.test(content) ? '机票' : '其他交通';
-        if (group.property !== property || group.rate !== expenseRate || group.kind !== kind) throw new Error('分组用途、票种或抵扣税率与原发票不一致，请重新计算。');
-        used.add(row); amount += cents(invoice.amount); tax += property === '普票' ? 0 : cents(invoice.tax);
+        const expenseRate = property === '火车票' ? `${invoiceRate}-计算抵扣` : ['普票', '机票', '其他'].includes(property) ? '0%' : invoiceRate;
+        const kind = ['231', '232'].includes(before.workflowId) || group.category !== '交通' ? '通用' : property === '电子打车票' ? '打车' : property === '火车票' ? '火车' : property === '机票' ? '机票' :
+          /汽油|柴油|燃油|加油/.test(content) ? '燃油' : /机票|航空运输|飞机票/.test(content) ? '机票' :
+          /租车|代驾/.test(content) ? '租车代驾' : /出行服务/.test(content) ? '出行服务' : '其他交通';
+        const category = before.workflowId === '232' ? '其他' : before.workflowId === '231' ? (property === '普票' ? (/餐饮|餐费|餐食|就餐|用餐|饮食服务/.test(content) ? '餐费' : '其他') :
+          /住宿|客房|房费|宾馆|旅馆|酒店住宿/.test(content) ? '住宿' : /餐饮|餐费|餐食|就餐|用餐|饮食服务/.test(content) ? '餐费' :
+          /汽油|柴油|燃油|加油|停车|泊车|过路|通行费|高速公路|ETC|客运|旅客运输|铁路|火车|高铁|动车|机票|航空运输|飞机票|出租车|网约车|打车|租车|代驾|出行服务|交通运输|公交|地铁|轮渡/.test(content) ? '交通' : '其他') : group.category;
+        if (group.category !== category || group.property !== property || group.rate !== expenseRate || group.kind !== kind) throw new Error('分组内容、票种或抵扣税率与原发票不一致，请重新计算。');
+        used.add(row); amount += cents(invoice.amount); tax += ['普票', '机票', '其他'].includes(property) ? 0 : cents(invoice.tax);
         if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(tax)) throw new Error('汇总金额超出可精确计算范围。');
       }
       if (amount !== group.amountCents || tax !== group.taxCents) throw new Error('分组报销金额或可抵扣税额与原发票不一致，请重新计算。');
@@ -461,6 +499,7 @@
       }
     }
     if (used.size !== source.size) throw new Error('费用事项未包含当前全部发票，请重新计算。');
+    if (attachment > 0 && !attachmentUsed) throw new Error('费用事项遗漏附件发票金额，请重新计算。');
   }
 
   async function applyAutomatic(plan) {
@@ -469,7 +508,7 @@
     const before = snapshot();
     if (signature(before) !== plan?.signature) throw new Error('来源数据已变化，请重新点击新建费用事项。');
     if (!plan.automatic || !plan.ready || !plan.groups?.length) throw new Error('没有有效发票，未覆盖原费用事项。');
-    if (plan.groups.some(group => !LABELS[group.category] || !['普票', '专票', '电子打车票'].includes(group.property) || !Number.isSafeInteger(group.amountCents) || !Number.isSafeInteger(group.taxCents))) throw new Error('费用事项数据无效。');
+    if (plan.groups.some(group => !LABELS[group.category] || !['普票', '专票', '电子打车票', '火车票', '机票', '其他'].includes(group.property) || !Number.isSafeInteger(group.amountCents) || !Number.isSafeInteger(group.taxCents))) throw new Error('费用事项数据无效。');
     validateAmounts(plan, before);
     const fields = before.fields;
     const controlled = Object.keys(fields).filter(key => !['department', 'costCenter'].includes(key));
@@ -477,7 +516,7 @@
     const skippedGroups = [];
     const written = [];
     const used = new Set();
-    const rowKey = row => owned.get(row.row)?.key || `${Object.keys(LABELS).find(key => normalizeLabel(display(`${fields.category}_${row.row}`)) === normalizeLabel(LABELS[key])) || ''}|${display(`${fields.property}_${row.row}`)}|${display(`${fields.rate}_${row.row}`).replace(/(\d+)\.0+%$/, '$1%')}`;
+    const rowKey = row => owned.get(row.row)?.key || `${fields.category ? Object.keys(LABELS).find(key => normalizeLabel(display(`${fields.category}_${row.row}`)) === normalizeLabel(LABELS[key])) || '' : ''}|${display(`${fields.property}_${row.row}`)}|${display(`${fields.rate}_${row.row}`).replace(/(\d+)\.0+%$/, '$1%')}`;
     const clear = row => {
       for (const key of controlled) setValue(form, `${fields[key]}_${row}`, {value: '', ...(['smallCategory', 'departure', 'arrival'].includes(key) ? {specialobj: []} : {})});
     };
@@ -485,11 +524,21 @@
     // Capture all labels before touching any row; matching does not use row order.
     const existingKeys = new Map(before.existing.map(row => [row.row, rowKey(row)]));
     lastUndo = null;
+    if (before.workflowId === '232') {
+      if (plan.dailyBigCategory) {
+        try {
+          if (normalizeLabel(display('field21214')) !== normalizeLabel(plan.dailyBigCategory)) {
+            await selectLabel(form, 'field21214', [plan.dailyBigCategory], true);
+            await waitStable(() => indexes(form, 'detail_1').map(row => display(`${fields.smallCategory}_${row}`)), '费用大类与小类选项', 400);
+          }
+        } catch (error) { pending.push(`待补费用大类（${plan.dailyBigCategory}：${error.message}）`); }
+      } else pending.push('待补费用大类：发票用途不同或无法识别，请在原页面核对后选择。');
+    }
     for (const group of plan.groups) {
       const label = `${group.category} / ${group.kind} / ${group.property} / ${group.rate}`;
       let row = before.existing.find(item => !used.has(item.row) && existingKeys.get(item.row) === group.key)?.row;
       if (row == null) row = before.existing.find(item => !used.has(item.row) && !owned.has(item.row) &&
-        existingKeys.get(item.row) === `${group.category}|${group.property}|${group.rate}` && item.values.amount === text(group.amountCents))?.row;
+        existingKeys.get(item.row) === `${fields.category ? group.category : ''}|${group.property}|${group.rate}` && item.values.amount === text(group.amountCents))?.row;
       if (row == null) row = before.existing.find(item => !used.has(item.row) && controlled.every(key => !item.values[key]) && !item.values.department && !item.values.costCenter)?.row;
       let created = false;
       const groupPending = [];
@@ -500,28 +549,30 @@
           form.addDetailRow('detail_1', {});
           row = await waitUntil(() => indexes(form, 'detail_1').find(index => !previous.has(index)), '新增费用事项失败');
           created = true;
-          await waitUntil(() => fieldRoot(`${fields.category}_${row}`), '新增费用事项尚未加载');
+          await waitUntil(() => fieldRoot(`${fields.property}_${row}`), '新增费用事项尚未加载');
         }
         used.add(row);
         clear(row);
         const mark = key => `${fields[key]}_${row}`;
-        for (const [key, value] of [['smallCategory', '国内差旅费'], ['departure', plan.trip.departure], ['arrival', plan.trip.arrival]]) {
+        for (const [key, value] of [['smallCategory', before.workflowId === '232' ? group.smallCategory : '国内差旅费'], ['departure', plan.trip.departure], ['arrival', plan.trip.arrival]].filter(([key]) => fields[key])) {
           try {
             if (!value) throw new Error('未识别');
-            await selectLabel(form, mark(key), key === 'smallCategory' ? ['国内差旅费', '国内差旅'] : [value], true);
+            await selectLabel(form, mark(key), key === 'smallCategory' && before.workflowId === '230' ? ['国内差旅费', '国内差旅'] : [value], true);
           } catch (error) {
             setValue(form, mark(key), {value: '', specialobj: []});
             groupPending.push(`${label}：待补${{smallCategory: '费用小类', departure: '出发城市', arrival: '到达城市'}[key]}（${error.message}）`);
           }
         }
-        if (/^\d+$/.test(plan.trip.days) && Number(plan.trip.days) > 0) setValue(form, mark('days'), {value: plan.trip.days});
-        else groupPending.push(`${label}：待补停留天数`);
-        await selectLabel(form, mark('category'), [LABELS[group.category]]);
+        if (fields.days) {
+          if (/^\d+$/.test(plan.trip.days) && Number(plan.trip.days) > 0) setValue(form, mark('days'), {value: plan.trip.days});
+          else groupPending.push(`${label}：待补停留天数`);
+        }
+        if (fields.category) await selectLabel(form, mark('category'), [LABELS[group.category]]);
         await selectLabel(form, mark('property'), [group.property]);
         await waitStable(() => ({property: form.getFieldValue(mark('property')), rates: choices(mark('rate'))}), '发票属性与税率选项', 400);
-        const rateLabels = /^\d/.test(group.rate) ? [group.rate, `${Number(group.rate.replace('%', ''))}.00%`, group.rate.replace('%', '')] : [group.rate];
+        const rateLabels = /^\d+(?:\.\d+)?%$/.test(group.rate) ? [group.rate, `${Number(group.rate.replace('%', ''))}.00%`, group.rate.replace('%', '')] : [group.rate];
         await selectLabel(form, mark('rate'), rateLabels);
-        const expected = Object.fromEntries(['category', 'property', 'rate'].map(key => [key, String(form.getFieldValue(mark(key)) || '')]));
+        const expected = Object.fromEntries(['category', 'property', 'rate'].filter(key => fields[key]).map(key => [key, String(form.getFieldValue(mark(key)) || '')]));
         await waitStable(() => controlled.map(key => form.getFieldValue(mark(key))), '费用事项', 700);
         setValue(form, mark('amount'), {value: text(group.amountCents)});
         setValue(form, mark('tax'), {value: text(group.taxCents)});
@@ -571,7 +622,7 @@
     if (signature(before) !== plan.signature) throw new Error('发票、事前申请或出差天数已变化，请重新读取计算。');
     if (!Array.isArray(plan.groups) || !plan.groups.length || plan.errors?.length || !plan.ready) throw new Error('请先完成计算并处理所有待填写项。');
     if (!/^\d+$/.test(plan.trip?.days || '') || Number(plan.trip.days) <= 0 || !plan.trip.departure || !plan.trip.arrival) throw new Error('城市或停留天数不完整。');
-    if (plan.groups.some(group => !LABELS[group.category] || !['普票', '专票', '电子打车票'].includes(group.property) || !Number.isSafeInteger(group.amountCents) || !Number.isSafeInteger(group.taxCents))) throw new Error('费用事项数据无效。');
+    if (plan.groups.some(group => !LABELS[group.category] || !['普票', '专票', '电子打车票', '火车票', '机票', '其他'].includes(group.property) || !Number.isSafeInteger(group.amountCents) || !Number.isSafeInteger(group.taxCents))) throw new Error('费用事项数据无效。');
     validateAmounts(plan, before);
     const fields = before.fields;
     const controlled = Object.keys(fields).filter(key => !['department', 'costCenter'].includes(key));
@@ -612,7 +663,7 @@
         await selectLabel(form, mark('property'), [group.property]);
         // The production form changes rate choices when invoice property changes.
         await waitStable(() => ({property: form.getFieldValue(mark('property')), rates: choices(mark('rate'))}), '发票属性与税率选项', 400);
-        const rateLabels = /^\d/.test(group.rate) ? [group.rate, `${Number(group.rate.replace('%', ''))}.00%`, group.rate.replace('%', '')] : [group.rate];
+        const rateLabels = /^\d+(?:\.\d+)?%$/.test(group.rate) ? [group.rate, `${Number(group.rate.replace('%', ''))}.00%`, group.rate.replace('%', '')] : [group.rate];
         await selectLabel(form, mark('rate'), rateLabels);
         await waitStable(() => controlled.map(key => form.getFieldValue(mark(key))), '费用事项', 700);
         setValue(form, mark('amount'), {value: centsText(group.amountCents)});
@@ -681,7 +732,7 @@
   }
 
   window.JdlExpenseAdapter = {
-    version: '0.2.5',
+    version: '0.2.8',
     async run(command, payload) {
       if (busy) return {ok: false, error: '正在处理，请等待本次操作完成。'};
       busy = true;

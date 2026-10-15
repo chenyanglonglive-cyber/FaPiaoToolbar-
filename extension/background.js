@@ -4,7 +4,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     const tabId = sender.tab.id;
     const tab = await chrome.tabs.get(tabId);
     const url = new URL(tab.url || '');
-    if (url.hostname !== 'crm.jd-link.com' || url.port !== '8888' || !url.pathname.startsWith('/spa/workflow/')) throw new Error('请在佳利达差旅报销页面使用助手。');
+    if (url.hostname !== 'crm.jd-link.com' || url.port !== '8888' || !url.pathname.startsWith('/spa/workflow/')) throw new Error('请在差旅费、业务招待或日常费用报销单页面使用助手。');
     if (message.command === 'collapse') {
       await chrome.tabs.sendMessage(tabId, {channel: 'jdl-panel-size', collapsed: !!message.collapsed});
       return {ok: true};
