@@ -1,6 +1,6 @@
 /* Runs only when the user invokes the extension. Never saves or submits a workflow. */
 (() => {
-  if (window.JdlExpenseAdapter?.version === '0.2.8') return;
+  if (window.JdlExpenseAdapter?.version === '0.2.9') return;
   const TRAVEL_TARGET = {
     smallCategory: ['fyxl1', 'field21331'], departure: ['cfdd', 'field21313'],
     arrival: ['dddd', 'field21314'], days: ['tlts', 'field21315'],
@@ -350,8 +350,8 @@
       existing, fields, canUndo: !!lastUndo};
   }
 
-  const SHARED_FIELDS = {department: '费用部门', costCenter: '成本中心', departure: '出发城市', arrival: '到达城市'};
-  const availableShared = fields => Object.entries(SHARED_FIELDS).filter(([key]) => !!fields[key]);
+  const FIRST_ROW_FIELDS = {department: '费用部门', smallCategory: '费用小类', costCenter: '成本中心', departure: '出发城市', arrival: '到达城市'};
+  const copyFields = state => Object.entries(FIRST_ROW_FIELDS).filter(([key]) => !!state.fields[key]);
 
   function sharedState() {
     const form = api();
@@ -360,52 +360,51 @@
     const rows = allRows.filter(row => ['category', 'amount'].filter(key => fields[key]).some(key => String(form.getFieldValue(`${fields[key]}_${row}`) || '').trim()));
     const currentContext = context(form);
     if (ownershipContext !== currentContext) { owned.clear(); lastUndo = null; ownershipContext = currentContext; }
-    const fingerprint = JSON.stringify({context: currentContext, rows: rows.map(row => ({row,
-      category: fields.category ? String(form.getFieldValue(`${fields.category}_${row}`) || '') : '',
-      property: String(form.getFieldValue(`${fields.property}_${row}`) || ''),
-      rate: String(form.getFieldValue(`${fields.rate}_${row}`) || ''),
-      amount: String(form.getFieldValue(`${fields.amount}_${row}`) || '')}))});
-    return {form, fields, allRows, rows, context: currentContext, fingerprint};
+    return {form, fields, allRows, rows, workflowId: workflowId(form), context: currentContext};
   }
 
-  function sharedOptions() {
+  function firstRowState() {
     const state = sharedState();
-    const options = {};
-    const defaults = {};
+    const fields = copyFields(state);
+    const source = state.rows[0];
+    const sourceValues = {};
     const missing = [];
-    for (const [key, label] of availableShared(state.fields)) {
-      const found = new Map();
-      const selected = new Set();
+    for (const [key, label] of fields) {
+      if (source != null) sourceValues[key] = display(`${state.fields[key]}_${source}`);
       for (const row of state.rows) {
         const mark = `${state.fields[key]}_${row}`;
-        for (const choice of choices(mark)) if (choice.value && choice.label) found.set(choice.label, choice.label);
-        const value = String(state.form.getFieldValue(mark) || '');
-        const shown = display(mark);
-        if (value && shown) { found.set(shown, shown); selected.add(shown); }
-        if (!value) missing.push(`第 ${state.allRows.indexOf(row) + 1} 行：待补${label}`);
+        if (!state.form.getFieldValue(mark)) missing.push(`第 ${state.allRows.indexOf(row) + 1} 行：待补${label}`);
       }
-      options[key] = [...found.values()];
-      defaults[key] = selected.size === 1 ? [...selected][0] : '';
     }
-    return {ok: true, context: state.context, fingerprint: state.fingerprint, rowCount: state.rows.length, fields: availableShared(state.fields).map(([key]) => key), options, defaults, missing};
+    return {ok: true, context: state.context, workflowId: state.workflowId, rowCount: state.rows.length,
+      sourcePosition: source == null ? 0 : state.allRows.indexOf(source) + 1,
+      fields: fields.map(([key, label]) => ({key, label})), sourceValues, missing};
   }
 
-  async function applyShared(payload) {
+  async function applyFirstRow(payload) {
     const state = sharedState();
-    if (!state.rows.length) throw new Error('当前页面没有可批量填写的费用事项。');
-    if (payload?.context !== state.context || payload?.fingerprint !== state.fingerprint) throw new Error('费用事项已变化，请刷新悬浮窗选项后重试。');
-    const requested = availableShared(state.fields).map(([key, label]) => ({key, label, name: String(payload?.values?.[key] || '').trim()})).filter(item => item.name);
-    if (!requested.length) throw new Error('请至少填写一个公共字段。');
-    if (requested.some(item => item.name.length > 120)) throw new Error('字段名称过长，请核对。');
+    if (payload?.context !== state.context) throw new Error('报销单已切换，请重新打开或刷新助手。');
+    if (state.rows.length < 2) throw new Error('当前不足两条费用事项，无需批量应用。');
+    const source = state.rows[0];
+    const fields = copyFields(state);
+    const requested = fields.map(([key, label]) => {
+      const mark = `${state.fields[key]}_${source}`;
+      return {key, label, ...valueInfo(state.form, mark, true), shown: display(mark), browser: !fieldRoot(mark)?.querySelector('select')};
+    });
+    const ready = requested.filter(item => item.value && (!item.browser || item.shown));
+    if (!ready.length) throw new Error('请先在原报销页的首条费用事项填写公共字段。');
     const written = [];
     const pending = [];
-    for (const row of state.rows) {
-      for (const item of requested) {
+    for (const item of requested.filter(item => !ready.includes(item))) pending.push(`首行待补${item.label}；本次未复制该字段。`);
+    for (const row of state.rows.slice(1)) {
+      for (const item of ready) {
         const mark = `${state.fields[item.key]}_${row}`;
         const old = valueInfo(state.form, mark, true);
-        if (old.value && normalizeLabel(display(mark)) === normalizeLabel(item.name)) continue;
+        if (old.value === item.value && (!item.browser || normalizeLabel(display(mark)) === normalizeLabel(item.shown))) continue;
         try {
-          await selectLabel(state.form, mark, [item.name], true);
+          setValue(state.form, mark, {value: item.value, ...(item.browser ? {specialobj: item.specialobj} : {})});
+          await waitUntil(() => String(state.form.getFieldValue(mark) || '') === item.value, `系统未接受首行的${item.label}`, 1500);
+          if (item.browser) await waitUntil(() => normalizeLabel(display(mark)) === normalizeLabel(item.shown), `系统未显示首行的${item.label}`, 1500);
           written.push({row, position: state.allRows.indexOf(row) + 1, field: item.key, label: display(mark)});
           const entry = owned.get(row);
           if (entry?.values && Object.hasOwn(entry.values, item.key)) entry.values[item.key] = String(state.form.getFieldValue(mark) || '');
@@ -415,13 +414,13 @@
             catch (restoreError) { throw new Error(`第 ${state.allRows.indexOf(row) + 1} 行${item.label}未能恢复，请核对原页面：${restoreError.message}`); }
             if (String(state.form.getFieldValue(mark) || '') !== old.value) throw new Error(`第 ${state.allRows.indexOf(row) + 1} 行${item.label}未能恢复，请核对原页面。`);
           }
-          pending.push(`第 ${state.allRows.indexOf(row) + 1} 行${item.label}未填写：${error.message}`);
+          pending.push(`第 ${state.allRows.indexOf(row) + 1} 行${item.label}未复制：${error.message}`);
         }
       }
     }
     if (written.length) lastUndo = null;
-    const after = sharedOptions();
-    return {...after, written, pending, message: `已向 ${state.rows.length} 条费用事项应用公共字段；成功填写 ${written.length} 个单元格，${pending.length} 个未填写。未保存或提交。`};
+    const after = firstRowState();
+    return {...after, written, pending, message: `已从第 ${after.sourcePosition} 行复制到其余 ${state.rows.length - 1} 条费用事项；成功填写 ${written.length} 个单元格，${pending.length} 个待补。未保存或提交。`};
   }
 
   function signature(snapshot) {
@@ -732,14 +731,14 @@
   }
 
   window.JdlExpenseAdapter = {
-    version: '0.2.8',
+    version: '0.2.9',
     async run(command, payload) {
       if (busy) return {ok: false, error: '正在处理，请等待本次操作完成。'};
       busy = true;
       try {
         if (command === 'read') return {ok: true, snapshot: snapshot()};
-        if (command === 'sharedOptions') return sharedOptions();
-        if (command === 'applyShared') return await applyShared(payload);
+        if (command === 'firstRowState') return firstRowState();
+        if (command === 'applyFirstRow') return await applyFirstRow(payload);
         if (command === 'apply') return await apply(payload);
         if (command === 'automatic') return await applyAutomatic(payload);
         if (command === 'undo') return await undoApply();

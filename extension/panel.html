@@ -1,13 +1,8 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>报销事项助手</title><link rel="stylesheet" href="panel.css"></head>
-<body><header><div class="title"><strong>报销事项助手</strong><span class="version" aria-label="当前版本 0.2.8">v0.2.8</span></div><button id="collapse" aria-expanded="true">收起</button></header>
+<body><header><div class="title"><strong>报销事项助手</strong><span class="version" aria-label="当前版本 0.2.9">v0.2.9</span></div><button id="collapse" aria-expanded="true">收起</button></header>
 <main id="body"><p class="hint">读取全部发票，自动覆盖费用事项。</p><button id="generate" class="primary">新建费用事项</button><p class="hint">匹配分组保留部门和成本中心。保存、提交请在原页面完成。</p>
 <p id="status" role="status" aria-live="polite">准备就绪</p>
-<section id="shared" hidden><h2>批量填写公共字段 <small id="shared-count"></small></h2><p class="hint">候选值来自当前报销页；也可输入名称，由原页面核对。留空的字段不会修改。</p><div class="shared-grid">
-<label>费用部门<input id="shared-department" list="options-department" autocomplete="off" placeholder="选择或输入费用部门"></label><datalist id="options-department"></datalist>
-<label>成本中心<input id="shared-costCenter" list="options-costCenter" autocomplete="off" placeholder="选择或输入成本中心"></label><datalist id="options-costCenter"></datalist>
-<label>出发城市<input id="shared-departure" list="options-departure" autocomplete="off" placeholder="选择或输入出发城市"></label><datalist id="options-departure"></datalist>
-<label>到达城市<input id="shared-arrival" list="options-arrival" autocomplete="off" placeholder="选择或输入到达城市"></label><datalist id="options-arrival"></datalist>
-</div><button id="apply-shared" class="secondary" type="button">应用到所有项</button><p id="shared-status" class="hint" role="status" aria-live="polite"></p></section>
+<section id="shared" hidden><h2>首行公共字段 <small id="shared-count"></small></h2><p id="first-row-hint" class="hint"></p><button id="apply-first-row" class="secondary" type="button">应用首行到所有</button><p id="shared-status" class="hint" role="status" aria-live="polite"></p></section>
 <section id="outcome" hidden><h2>待补与跳过项</h2><ul id="pending"></ul><details id="logs"><summary>查看本次日志</summary><h2>费用事项与发票核算表</h2><p class="hint">每个事项列出对应发票，金额单位：元。表格可左右滚动查看票面与可抵扣税额；跳过的分组不会计入已填写事项。</p><div id="ledger"></div><details><summary>完整文字日志</summary><pre id="log"></pre></details></details><button id="download">下载日志</button></section>
 </main><script type="module" src="panel.js"></script></body></html>

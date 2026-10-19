@@ -7,7 +7,6 @@ let latest = '';
 let latestResult = null;
 let pendingItems = [];
 let sharedScope = null;
-const SHARED_KEYS = ['department', 'costCenter', 'departure', 'arrival'];
 function element(tag, text) {
   const node = document.createElement(tag);
   if (text != null) node.textContent = text;
@@ -17,6 +16,7 @@ function renderLedger(result) {
   const container = $('ledger');
   container.replaceChildren();
   if (!result?.groups.length) { container.append(element('p', '无有效费用分组。')); return; }
+  if (result.manualCategoryOverride) container.append(element('p', '费用小类已按首行覆盖；下表保留生成时的发票分组，最终小类请以原报销页为准。'));
   for (const group of expenseLedger(result)) {
     const block = element('section'); block.className = 'ledger-group';
     block.append(element('h3', `${group.title} · ${result.workflowId === '232' ? `${group.bigCategory || '大类待补'} / ${group.smallCategory || '小类待补'} / ` : ''}${group.category} / ${group.kind} / ${group.property} / ${group.rate}`));
@@ -60,28 +60,22 @@ async function saveLog() {
     await chrome.storage.local.set({expenseLogs: [entry, ...(stored.expenseLogs || [])].slice(0, 20)});
   } catch { $('status').textContent += ' 本机日志保存失败，请下载日志。'; }
 }
-function displayShared(reply) {
+function displayFirstRow(reply) {
   if (sharedScope && sharedScope.context !== reply.context) {
-    for (const key of SHARED_KEYS) $(`shared-${key}`).value = '';
-    $('shared-status').textContent = '已切换报销单，请重新选择要批量填写的值。';
+    $('shared-status').textContent = '已切换报销单，请先在原页面填写首行。';
   }
-  sharedScope = {context: reply.context, fingerprint: reply.fingerprint};
+  sharedScope = {context: reply.context};
   $('shared').hidden = !reply.rowCount;
   $('shared-count').textContent = `（当前 ${reply.rowCount} 项）`;
-  for (const key of SHARED_KEYS) {
-    $(`shared-${key}`).closest('label').hidden = !reply.fields?.includes(key);
-    if (!reply.fields?.includes(key)) $(`shared-${key}`).value = '';
-    const list = $(`options-${key}`);
-    list.replaceChildren();
-    for (const label of reply.options?.[key] || []) { const option = document.createElement('option'); option.value = label; list.append(option); }
-  }
+  $('first-row-hint').textContent = `先在原报销页第 ${reply.sourcePosition} 行填好${(reply.fields || []).map(item => item.label).join('、')}；点击时读取系统当前选值，只复制非空字段。金额、票种和税率不会改变。${reply.workflowId === '232' ? '日常费用单的其他行费用小类会被首行覆盖，请核对。' : ''}`;
+  $('apply-first-row').disabled = running || reply.rowCount < 2;
 }
-async function refreshShared() {
+async function refreshFirstRow() {
   if (running) return;
   try {
-    const reply = await request('sharedOptions');
+    const reply = await request('firstRowState');
     if (!reply.ok) throw new Error(reply.error);
-    displayShared(reply);
+    displayFirstRow(reply);
   } catch (error) {
     sharedScope = null;
     $('shared').hidden = true;
@@ -101,7 +95,7 @@ $('collapse').addEventListener('click', async () => {
 });
 $('generate').addEventListener('click', async () => {
   if (running) return;
-  running = true; $('generate').disabled = true; $('apply-shared').disabled = true; $('outcome').hidden = true;
+  running = true; $('generate').disabled = true; $('apply-first-row').disabled = true; $('outcome').hidden = true;
   $('body').setAttribute('aria-busy', 'true');
   $('pending').replaceChildren();
   let result;
@@ -133,41 +127,44 @@ $('generate').addEventListener('click', async () => {
     $('log').textContent = latest; $('outcome').hidden = false;
     await saveLog();
     running = false; $('generate').disabled = false; $('body').setAttribute('aria-busy', 'false');
-    $('apply-shared').disabled = false;
-    await refreshShared();
+    $('apply-first-row').disabled = false;
+    await refreshFirstRow();
   }
 });
-$('apply-shared').addEventListener('click', async () => {
+$('apply-first-row').addEventListener('click', async () => {
   if (running) return;
-  running = true; $('generate').disabled = true; $('apply-shared').disabled = true;
+  running = true; $('generate').disabled = true; $('apply-first-row').disabled = true;
   $('body').setAttribute('aria-busy', 'true');
   try {
     if (!sharedScope) throw new Error('尚未读取到当前费用事项，请刷新报销页面后重试。');
-    const values = Object.fromEntries(SHARED_KEYS.filter(key => !$(`shared-${key}`).closest('label').hidden).map(key => [key, $(`shared-${key}`).value.trim()]));
-    $('shared-status').textContent = '正在将公共字段填写到当前费用事项…';
-    const reply = await request('applyShared', {...sharedScope, values});
+    $('shared-status').textContent = '正在读取首行并复制公共字段…';
+    const reply = await request('applyFirstRow', sharedScope);
     if (!reply.ok) throw new Error(reply.error);
-    displayShared(reply);
+    displayFirstRow(reply);
     $('shared-status').textContent = reply.message;
-    pendingItems = pendingItems.filter(item => !/待补(?:费用部门|成本中心|出发城市|到达城市)/.test(item));
+    if (reply.workflowId === '232' && reply.written.some(item => item.field === 'smallCategory') && latestResult) {
+      latestResult.manualCategoryOverride = true;
+      renderLedger(latestResult);
+    }
+    pendingItems = pendingItems.filter(item => !(reply.fields || []).some(field => item.includes(`待补${field.label}`)));
     pendingItems.push(...reply.missing, ...reply.pending);
     renderPending();
-    const names = {department: '费用部门', costCenter: '成本中心', departure: '出发城市', arrival: '到达城市'};
-    const lines = [reply.message, ...reply.written.map(item => `第 ${item.position} 行${names[item.field]}：${item.label}`), ...reply.pending];
-    latest = `${latest || '佳利达 · 费用事项操作日志'}\n\n【公共字段批量填写】\n${lines.join('\n')}`;
+    const names = Object.fromEntries((reply.fields || []).map(item => [item.key, item.label]));
+    const lines = [reply.message, ...(reply.workflowId === '232' && reply.written.some(item => item.field === 'smallCategory') ? ['日常费用单：费用小类已按首行覆盖，请核对发票用途。'] : []), ...reply.written.map(item => `第 ${item.position} 行${names[item.field]}：${item.label}`), ...reply.pending];
+    latest = `${latest || '佳利达 · 费用事项操作日志'}\n\n【应用首行到所有】\n${lines.join('\n')}`;
     $('log').textContent = latest;
     $('outcome').hidden = false;
     await saveLog();
   } catch (error) {
-    $('shared-status').textContent = `批量填写未全部完成：${error.message}`;
+    $('shared-status').textContent = `首行复制未全部完成：${error.message}`;
   } finally {
-    running = false; $('generate').disabled = false; $('apply-shared').disabled = false;
+    running = false; $('generate').disabled = false; $('apply-first-row').disabled = false;
     $('body').setAttribute('aria-busy', 'false');
-    await refreshShared();
+    await refreshFirstRow();
   }
 });
-for (const key of SHARED_KEYS) $(`shared-${key}`).addEventListener('focus', () => { if (!running) refreshShared(); });
-refreshShared();
+refreshFirstRow();
+window.addEventListener('focus', () => { if (!running) refreshFirstRow(); });
 $('download').addEventListener('click', () => {
   const url = URL.createObjectURL(new Blob(['\uFEFF', latest], {type: 'text/plain;charset=utf-8'}));
   const link = document.createElement('a'); link.href = url; link.download = `报销日志-${Date.now()}.txt`; link.click();

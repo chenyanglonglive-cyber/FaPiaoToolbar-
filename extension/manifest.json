@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "佳利达 · 报销事项助手",
   "description": "仅在差旅费、业务招待、日常费用报销单页面生成费用事项，并显示逐票核算日志。",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "minimum_chrome_version": "102",
   "permissions": ["activeTab", "scripting", "storage"],
   "background": {"service_worker": "background.js"},

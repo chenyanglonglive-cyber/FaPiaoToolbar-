@@ -36,12 +36,12 @@ test('收起只发送调整悬浮窗尺寸的扩展消息', async () => {
   const reply = await new Promise(resolve => f.handler({channel:'jdl-panel',command:'collapse',collapsed:true},f.sender,resolve));
   assert.equal(reply.ok,true); assert.equal(f.calls[0].type,'message'); assert.equal(f.calls[0].args[1].collapsed,true);
 });
-test('公共字段读取与批量填写仅转发给所属报销页', async () => {
+test('首行公共字段读取与复制仅转发给所属报销页', async () => {
   const f = await fixture();
-  for (const command of ['sharedOptions', 'applyShared']) {
+  for (const command of ['firstRowState', 'applyFirstRow']) {
     const reply = await new Promise(resolve => f.handler({channel:'jdl-panel',command,payload:{context:'mock'}},f.sender,resolve));
     assert.equal(reply.ok,true);
   }
-  assert.deepEqual(f.calls.map(call=>call.args.args[0]),['sharedOptions','applyShared']);
+  assert.deepEqual(f.calls.map(call=>call.args.args[0]),['firstRowState','applyFirstRow']);
   assert.equal(f.calls.every(call=>call.args.target.tabId===7&&call.args.world==='MAIN'),true);
 });

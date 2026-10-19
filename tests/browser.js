@@ -167,32 +167,40 @@ async function suite(){
     let read=await w.JdlExpenseAdapter.run('read');let reply=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot));assert(reply.ok,reply.error);assert(w.WfForm.getFieldValue('field21319_0')==='','未清理旧金额');assert(w.WfForm.getFieldValue('field21326_0')==='unmatched-dept'&&reply.pending.some(item=>item.includes('无法匹配')),'无法匹配信息丢失');
     for(const row of [...w.MockForm.rows.detail_3])w.MockForm.setSource(row,'发票税额','');const count=w.MockForm.apiCalls().length;read=await w.JdlExpenseAdapter.run('read');reply=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot));assert(!reply.ok,'全无效不应覆盖');assert(count===w.MockForm.apiCalls().length,'全无效改变原表');
   });
-  await run('公共字段候选取自当前页面并批量填写所有费用事项',async()=>{
+  await run('直接复制首行五项公共字段，不改变各项报销金额',async()=>{
     const w=await load();const read=await w.JdlExpenseAdapter.run('read');
     const created=await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot));assert(created.ok,created.error);
-    const options=await w.JdlExpenseAdapter.run('sharedOptions');assert(options.ok,options.error);
-    assert(options.rowCount===8,'未识别当前8条费用事项');
-    assert(options.options.department.includes('明阳智慧综合部')&&options.options.costCenter.includes('深圳佳利达')&&options.options.departure.includes('深圳'),'未从页面读取动态选项');
+    const first=w.MockForm.rows.detail_1[0];
+    for(const [field,value] of [['field21326','dept-admin'],['field21325','cost-shenzhen'],['field21313','city-sz'],['field21314','city-bj']])w.WfForm.changeFieldValue(`${field}_${first}`,{value});
+    w.WfForm.changeFieldValue(`field21331_${w.MockForm.rows.detail_1[1]}`,{value:''});
+    const state=await w.JdlExpenseAdapter.run('firstRowState');assert(state.ok,state.error);
+    assert(state.rowCount===8&&state.fields.map(field=>field.key).join(',')==='department,smallCategory,costCenter,departure,arrival','首行五项公共字段识别错误');
     const before=w.MockForm.rows.detail_1.map(row=>w.WfForm.getFieldValue(`field21319_${row}`));
-    const applied=await w.JdlExpenseAdapter.run('applyShared',{context:options.context,fingerprint:options.fingerprint,
-      values:{department:'明阳智慧综合部',costCenter:'深圳佳利达',departure:'深圳',arrival:'北京'}});
-    assert(applied.ok,applied.error);assert(applied.written.length===32,'公共字段未逐项填写');assert(applied.pending.length===0&&applied.missing.length===0,'完成后仍显示缺失');
+    const applied=await w.JdlExpenseAdapter.run('applyFirstRow',{context:state.context});
+    assert(applied.ok,applied.error);assert(applied.written.length>0,'首行公共字段未逐项复制');assert(applied.pending.length===0&&applied.missing.length===0,'完成后仍显示缺失');
     for(const [index,row] of w.MockForm.rows.detail_1.entries()){
       assert(w.WfForm.getFieldValue(`field21326_${row}`)==='dept-admin','部门未填写');
       assert(w.WfForm.getFieldValue(`field21325_${row}`)==='cost-shenzhen','成本中心未填写');
       assert(w.WfForm.getFieldValue(`field21313_${row}`)==='city-sz'&&w.WfForm.getFieldValue(`field21314_${row}`)==='city-bj','城市未填写');
-      assert(w.WfForm.getFieldValue(`field21319_${row}`)===before[index],'批量填写改变了报销金额');
+      assert(w.WfForm.getFieldValue(`field21331_${row}`)==='travel-domestic','费用小类未复制');
+      assert(w.WfForm.getFieldValue(`field21319_${row}`)===before[index],'复制改变了报销金额');
     }
   });
-  await run('公共字段填写校验报销单和事项状态，未知选项单独提示',async()=>{
+  await run('首行复制在点击时重新读取系统选值，切换报销单时拒绝写入',async()=>{
     const w=await load();const read=await w.JdlExpenseAdapter.run('read');assert((await w.JdlExpenseAdapter.run('automatic',calculateAutomatic(read.snapshot))).ok,'事项创建失败');
-    let options=await w.JdlExpenseAdapter.run('sharedOptions');const count=w.MockForm.apiCalls().length;
-    w.MockForm.setContext('other-request');let reply=await w.JdlExpenseAdapter.run('applyShared',{context:options.context,fingerprint:options.fingerprint,values:{department:'明阳智慧综合部'}});
+    let state=await w.JdlExpenseAdapter.run('firstRowState');const count=w.MockForm.apiCalls().length;
+    w.MockForm.setContext('other-request');let reply=await w.JdlExpenseAdapter.run('applyFirstRow',{context:state.context});
     assert(!reply.ok&&w.MockForm.apiCalls().length===count,'切换报销单后仍写入');
-    options=await w.JdlExpenseAdapter.run('sharedOptions');
-    reply=await w.JdlExpenseAdapter.run('applyShared',{context:options.context,fingerprint:options.fingerprint,values:{department:'明阳智慧综合部',arrival:'不存在的城市'}});
-    assert(reply.ok,reply.error);assert(reply.written.length===8&&reply.pending.length===8,'未逐字段继续或提示未知选项');
+    state=await w.JdlExpenseAdapter.run('firstRowState');
+    const first=w.MockForm.rows.detail_1[0];w.WfForm.changeFieldValue(`field21326_${first}`,{value:'dept-admin'});
+    reply=await w.JdlExpenseAdapter.run('applyFirstRow',{context:state.context});
+    assert(reply.ok,reply.error);assert(reply.written.length===7&&reply.pending.some(item=>item.includes('首行待补成本中心')),'未读取刚填的首行或未提示首行空值');
     assert(w.MockForm.rows.detail_1.every(row=>w.WfForm.getFieldValue(`field21326_${row}`)==='dept-admin'),'有效部门未保留');
+    w.WfForm.changeFieldValue(`field21325_${first}`,{value:'cost-shenzhen'});
+    const failedRow=w.MockForm.rows.detail_1[1];w.MockForm.failAt(`field21325_${failedRow}`);
+    reply=await w.JdlExpenseAdapter.run('applyFirstRow',{context:state.context});
+    assert(reply.ok&&reply.pending.some(item=>item.includes('成本中心未复制')),'系统拒绝某行时没有报告待补');
+    assert(w.WfForm.getFieldValue(`field21325_${failedRow}`)===''&&w.MockForm.rows.detail_1.slice(2).every(row=>w.WfForm.getFieldValue(`field21325_${row}`)==='cost-shenzhen'),'单行失败影响了其他行或改变了原值');
   });
   await run('业务招待单只写票种税率金额税额，客运普票零抵扣，部门成本中心可批量选',async()=>{
     const w=await load();
@@ -206,13 +214,14 @@ async function suite(){
     const applied=await w.JdlExpenseAdapter.run('automatic',plan);assert(applied.ok,applied.error);
     assert(applied.rows.length===4,'业务事项未全部填入');
     assert(w.MockForm.apiCalls().filter(call=>call.type==='change').every(call=>!/^field213(?:13|14|15|20|31)_/.test(call.mark)),'业务事项误写差旅字段');
-    const options=await w.JdlExpenseAdapter.run('sharedOptions');assert(options.ok,options.error);
-    assert(options.fields.join(',')==='department,costCenter'&&!options.options.departure,'业务单不应显示城市公共字段');
-    const shared=await w.JdlExpenseAdapter.run('applyShared',{context:options.context,fingerprint:options.fingerprint,values:{department:'明阳智慧综合部',costCenter:'深圳佳利达',departure:'深圳'}});
-    assert(shared.ok&&shared.written.length===8,'部门及成本中心未批量填写');
+    const first=w.MockForm.rows.detail_1[0];w.WfForm.changeFieldValue(`field21326_${first}`,{value:'dept-admin'});w.WfForm.changeFieldValue(`field21325_${first}`,{value:'cost-shenzhen'});
+    const state=await w.JdlExpenseAdapter.run('firstRowState');assert(state.ok,state.error);
+    assert(state.fields.map(field=>field.key).join(',')==='department,costCenter','业务单不应显示城市公共字段');
+    const shared=await w.JdlExpenseAdapter.run('applyFirstRow',{context:state.context});
+    assert(shared.ok&&shared.written.length===6,'部门及成本中心未复制到其他三行');
     assert(w.MockForm.rows.detail_1.every(row=>!w.WfForm.getFieldValue(`field21313_${row}`)),'业务单误填出发城市');
   });
-  await run('日常费用单按福利费合并普票并按税率拆专票，只保留部门成本中心批量字段',async()=>{
+  await run('日常费用单按福利费合并普票并按税率拆专票，首行可复制部门小类成本中心',async()=>{
     const w=await load();w.WfForm.getBaseInfo=()=>({workflowid:'232',requestid:'daily-case'});
     w.MockForm.values.set('field21220','1526.66');
     const selected=w.document.createElement('span');selected.id='field21214span';selected.textContent='薪酬福利';w.document.body.append(selected);
@@ -233,7 +242,7 @@ async function suite(){
     assert(applied.rows.length===3,'日常事项未写全');
     assert(applied.rows.every(row=>w.WfForm.getFieldValue(`field21331_${row}`)==='welfare-code'),'未统一填写福利费');
     assert(w.MockForm.apiCalls().filter(call=>call.type==='change').every(call=>!/^field213(?:13|14|15|20)_/.test(call.mark)),'日常事项误写差旅字段');
-    const options=await w.JdlExpenseAdapter.run('sharedOptions');assert(options.ok&&options.fields.join(',')==='department,costCenter','日常单公共字段范围错误');
+    const state=await w.JdlExpenseAdapter.run('firstRowState');assert(state.ok&&state.fields.map(field=>field.key).join(',')==='department,smallCategory,costCenter','日常单公共字段范围错误');
   });
   await run('日常办公内容自动选择日常费用大类与日常办公费，混合税率专票跳过',async()=>{
     const w=await load();w.WfForm.getBaseInfo=()=>({workflowid:'232',requestid:'office-case'});
@@ -270,6 +279,12 @@ async function suite(){
     assert(applied.rows.length===2&&applied.pending.some(item=>item.includes('待补费用大类')),'未留大类待补');
     const small=applied.rows.map(row=>w.WfForm.getFieldValue(`field21331_${row}`)).sort();
     assert(small.join(',')==='office-code,welfare-code','两项明确小类未写入');
+    const first=applied.rows[0];const target=applied.rows[1];
+    const originalAmount=w.WfForm.getFieldValue(`field21319_${target}`);
+    const state=await w.JdlExpenseAdapter.run('firstRowState');assert(state.ok&&state.fields.map(field=>field.key).join(',')==='department,smallCategory,costCenter','日常单未允许首行小类复制');
+    const copied=await w.JdlExpenseAdapter.run('applyFirstRow',{context:state.context});assert(copied.ok,copied.error);
+    assert(w.WfForm.getFieldValue(`field21331_${target}`)===w.WfForm.getFieldValue(`field21331_${first}`),'未按首行覆盖不同费用小类');
+    assert(w.WfForm.getFieldValue(`field21319_${target}`)===originalAmount,'首行复制改变了金额');
   });
   document.getElementById('status').textContent=`测试完成：${passed} 通过，${failed} 失败`;document.getElementById('run').disabled=false;
 }

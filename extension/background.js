@@ -9,7 +9,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       await chrome.tabs.sendMessage(tabId, {channel: 'jdl-panel-size', collapsed: !!message.collapsed});
       return {ok: true};
     }
-    if (!['read', 'automatic', 'sharedOptions', 'applyShared'].includes(message.command)) throw new Error('不支持的操作');
+    if (!['read', 'automatic', 'firstRowState', 'applyFirstRow'].includes(message.command)) throw new Error('不支持的操作');
     const results = await chrome.scripting.executeScript({target: {tabId}, world: 'MAIN',
       func: (command, payload) => window.JdlExpenseAdapter.run(command, payload), args: [message.command, message.payload || null]});
     return results[0]?.result || {ok: false, error: '报销页面已刷新，请重新点击插件。'};
